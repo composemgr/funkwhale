@@ -1,0 +1,54 @@
+# nginx proxy address - http://172.17.0.1:8081
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "1"
+
+services:
+  funkwhale:
+    image: funkwhale/funkwhale:latest
+    container_name: funkwhale-app
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - funkwhale
+    ports:
+      - "8081:5000"
+    environment:
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - ./rootfs/data/funkwhale:/data
+      - ./rootfs/config/funkwhale:/config
+    depends_on:
+      - funkwhale-db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  funkwhale-db:
+    image: postgres:16-alpine
+    container_name: funkwhale-db
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - funkwhale
+    environment:
+      TZ: ${TZ:-America/New_York}
+      POSTGRES_DB: ${DB_CREATE_DATABASE_NAME:-funkwhale}
+      POSTGRES_USER: ${DB_USER_NAME:-funkwhale}
+      POSTGRES_PASSWORD: ${DB_USER_PASS:-changeme_db_password}
+    volumes:
+      - ./rootfs/db/postgres/funkwhale:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  funkwhale:
+    external: false
