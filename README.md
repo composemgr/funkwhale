@@ -50,9 +50,9 @@ See `docker-compose.yaml` for complete list of configurable options.
 
 ## 📂 Volumes
 
-- `./rootfs/data/funkwhale` - Data storage
-- `./rootfs/config/funkwhale` - Data storage
-- `./rootfs/data/db/postgres/funkwhale` - Data storage
+- `./volumes/data/funkwhale` - Data storage
+- `./volumes/config/funkwhale` - Data storage
+- `./volumes/data/db/postgres/funkwhale` - Data storage
 
 ## 🔐 Security
 
