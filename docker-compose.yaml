@@ -16,6 +16,8 @@ services:
     logging: *default-logging
     networks:
       - funkwhale
+      - proxy
+      - cloudflare
     ports:
       - "172.17.0.1:8081:80"
     environment:
@@ -26,7 +28,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.production
       DATABASE_URL: postgresql://${DB_USER_NAME:-funkwhale}:${DB_USER_PASS:-changeme_db_password}@funkwhale-db:5432/${DB_CREATE_DATABASE_NAME:-funkwhale}
       CACHE_URL: redis://funkwhale-redis:6379/0
-      EMAIL_CONFIG: smtp+tls://${EMAIL_SERVER_USER:-}:${EMAIL_SERVER_PASS:-}@${EMAIL_SERVER_HOST:-172.17.0.1}:${EMAIL_SERVER_PORT:-587}
+      EMAIL_CONFIG: smtp+tls://${EMAIL_SERVER_LOGIN_NAME:-}:${EMAIL_SERVER_LOGIN_PASS:-}@${EMAIL_SERVER_HOST:-172.17.0.1}:${EMAIL_SERVER_PORT:-587}
       DEFAULT_FROM_EMAIL: ${EMAIL_SERVER_MAIL_FROM:-noreply@example.com}
       FUNKWHALE_ADMIN_USERNAME: ${APP_ADMIN_USER:-admin}
       FUNKWHALE_ADMIN_EMAIL: ${EMAIL_SERVER_MAIL_FROM:-admin@example.com}
@@ -34,12 +36,30 @@ services:
       MUSIC_DIRECTORY_PATH: /music
       MEDIA_ROOT: /data/media
       STATIC_ROOT: /data/static
+      CONTAINER_NAME: funkwhale-app
+      HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
     volumes:
       - ./volumes/data/funkwhale:/data
       - ./volumes/music/funkwhale:/music:ro
     depends_on:
       - funkwhale-db
       - funkwhale-redis
+    labels:
+      - 'traefik.enable=true'
+      - 'cloudflare.enable=true'
+      - 'traefik.docker.network=proxy'
+      - 'cloudflare.service=http://funkwhale-app:80'
+      - 'cloudflare.hostname=funkwhale.${CLOUDFLARE_ZONE_NAME:-}'
+      - 'traefik.http.routers.funkwhale-app.entrypoints=http'
+      - 'traefik.http.routers.funkwhale-app-secure.tls=true'
+      - 'traefik.http.routers.funkwhale-app.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.middlewares.funkwhale-app-https-redirect.redirectscheme.scheme=https'
+      - 'traefik.http.routers.funkwhale-app.middlewares=funkwhale-app-https-redirect'
+      - 'traefik.http.routers.funkwhale-app-secure.entrypoints=https'
+      - 'traefik.http.routers.funkwhale-app-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.routers.funkwhale-app-secure.tls.certresolver=cloudflare'
+      - 'traefik.http.routers.funkwhale-app-secure.service=funkwhale-app'
+      - 'traefik.http.services.funkwhale-app.loadbalancer.server.port=80'
 
   funkwhale-db:
     image: postgres:latest
@@ -54,6 +74,7 @@ services:
       POSTGRES_DB: ${DB_CREATE_DATABASE_NAME:-funkwhale}
       POSTGRES_USER: ${DB_USER_NAME:-funkwhale}
       POSTGRES_PASSWORD: ${DB_USER_PASS:-changeme_db_password}
+      CONTAINER_NAME: funkwhale-db
     volumes:
       - ./volumes/data/db/postgres/funkwhale:/var/lib/postgresql/data
     healthcheck:
@@ -72,8 +93,14 @@ services:
       - funkwhale
     volumes:
       - ./volumes/data/redis/funkwhale:/data
+    environment:
+      CONTAINER_NAME: funkwhale-redis
 
 networks:
   funkwhale:
     name: funkwhale
     external: false
+  proxy:
+    external: true
+  cloudflare:
+    external: true
