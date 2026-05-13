@@ -7,11 +7,88 @@ x-logging: &default-logging
     max-size: "5m"
     max-file: "1"
 
+x-funkwhale-env: &funkwhale-env
+  env_file: .env
+  environment:
+    FUNKWHALE_HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
+    FUNKWHALE_PROTOCOL: http
+    DJANGO_SECRET_KEY: ${APP_SECRET_KEY:-changeme_secret_key_min_32_chars}
+    DJANGO_SETTINGS_MODULE: config.settings.production
+    DATABASE_URL: postgresql://${DB_USER_NAME:-funkwhale}:${DB_USER_PASS:-changeme_db_password}@funkwhale-db:5432/${DB_CREATE_DATABASE_NAME:-funkwhale}
+    CACHE_URL: redis://funkwhale-redis:6379/0
+    EMAIL_CONFIG: smtp+tls://${EMAIL_SERVER_LOGIN_NAME:-}:${EMAIL_SERVER_LOGIN_PASS:-}@${EMAIL_SERVER_HOST:-172.17.0.1}:${EMAIL_SERVER_PORT:-587}
+    DEFAULT_FROM_EMAIL: ${EMAIL_SERVER_MAIL_FROM:-noreply@example.com}
+    MEDIA_ROOT: /srv/funkwhale/data/media
+    STATIC_ROOT: /srv/funkwhale/data/static
+    MUSIC_DIRECTORY_PATH: /music
+    MUSIC_DIRECTORY_SERVE_PATH: /srv/funkwhale/data/music
+    REVERSE_PROXY_TYPE: nginx
+    CONTAINER_NAME: funkwhale-app
+    HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
+
 services:
-  app:
-    image: funkwhale/all-in-one:latest
+  funkwhale-api:
+    image: funkwhale/api:latest
     pull_policy: always
-    container_name: funkwhale-app
+    container_name: funkwhale-api
+    restart: always
+    logging: *default-logging
+    <<: *funkwhale-env
+    networks:
+      - funkwhale
+    depends_on:
+      - funkwhale-db
+      - funkwhale-redis
+    volumes:
+      - ./volumes/data/funkwhale/media:/srv/funkwhale/data/media
+      - ./volumes/data/funkwhale/static:/srv/funkwhale/data/static
+      - ./volumes/music/funkwhale:/music:ro
+      - ./volumes/data/funkwhale/music:/srv/funkwhale/data/music
+
+  funkwhale-worker:
+    image: funkwhale/api:latest
+    pull_policy: always
+    container_name: funkwhale-worker
+    restart: always
+    logging: *default-logging
+    <<: *funkwhale-env
+    command:
+      - celery
+      - --app=funkwhale_api.taskapp
+      - worker
+      - --loglevel=INFO
+    networks:
+      - funkwhale
+    depends_on:
+      - funkwhale-db
+      - funkwhale-redis
+    volumes:
+      - ./volumes/data/funkwhale/media:/srv/funkwhale/data/media
+      - ./volumes/music/funkwhale:/music:ro
+      - ./volumes/data/funkwhale/music:/srv/funkwhale/data/music
+
+  funkwhale-beat:
+    image: funkwhale/api:latest
+    pull_policy: always
+    container_name: funkwhale-beat
+    restart: always
+    logging: *default-logging
+    <<: *funkwhale-env
+    command:
+      - celery
+      - --app=funkwhale_api.taskapp
+      - beat
+      - --loglevel=INFO
+    networks:
+      - funkwhale
+    depends_on:
+      - funkwhale-db
+      - funkwhale-redis
+
+  funkwhale-front:
+    image: funkwhale/front:latest
+    pull_policy: always
+    container_name: funkwhale-front
     restart: always
     logging: *default-logging
     networks:
@@ -21,45 +98,29 @@ services:
     ports:
       - "172.17.0.1:8081:80"
     environment:
-      TZ: ${TZ:-America/New_York}
-      FUNKWHALE_HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
-      FUNKWHALE_PROTOCOL: http
-      DJANGO_SECRET_KEY: ${APP_SECRET_KEY:-changeme_secret_key_min_32_chars}
-      DJANGO_SETTINGS_MODULE: config.settings.production
-      DATABASE_URL: postgresql://${DB_USER_NAME:-funkwhale}:${DB_USER_PASS:-changeme_db_password}@funkwhale-db:5432/${DB_CREATE_DATABASE_NAME:-funkwhale}
-      CACHE_URL: redis://funkwhale-redis:6379/0
-      EMAIL_CONFIG: smtp+tls://${EMAIL_SERVER_LOGIN_NAME:-}:${EMAIL_SERVER_LOGIN_PASS:-}@${EMAIL_SERVER_HOST:-172.17.0.1}:${EMAIL_SERVER_PORT:-587}
-      DEFAULT_FROM_EMAIL: ${EMAIL_SERVER_MAIL_FROM:-noreply@example.com}
-      FUNKWHALE_ADMIN_USERNAME: ${APP_ADMIN_USER:-admin}
-      FUNKWHALE_ADMIN_EMAIL: ${EMAIL_SERVER_MAIL_FROM:-admin@example.com}
-      FUNKWHALE_ADMIN_PASSWORD: ${APP_ADMIN_PASS:-changeme_admin_password}
-      MUSIC_DIRECTORY_PATH: /music
-      MEDIA_ROOT: /data/media
-      STATIC_ROOT: /data/static
-      CONTAINER_NAME: funkwhale-app
-      HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
-    volumes:
-      - ./volumes/data/funkwhale:/data
-      - ./volumes/music/funkwhale:/music:ro
+      NGINX_MAX_BODY_SIZE: 100M
+      CONTAINER_NAME: funkwhale-front
     depends_on:
-      - funkwhale-db
-      - funkwhale-redis
+      - funkwhale-api
+    volumes:
+      - ./volumes/data/funkwhale/media:/srv/funkwhale/data/media:ro
+      - ./volumes/data/funkwhale/static:/srv/funkwhale/data/static:ro
     labels:
       - 'traefik.enable=true'
       - 'cloudflare.enable=true'
       - 'traefik.docker.network=proxy'
-      - 'cloudflare.service=http://funkwhale-app:80'
+      - 'cloudflare.service=http://funkwhale-front:80'
       - 'cloudflare.hostname=funkwhale.${CLOUDFLARE_ZONE_NAME:-}'
-      - 'traefik.http.routers.funkwhale-app.entrypoints=http'
-      - 'traefik.http.routers.funkwhale-app-secure.tls=true'
-      - 'traefik.http.routers.funkwhale-app.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
-      - 'traefik.http.middlewares.funkwhale-app-https-redirect.redirectscheme.scheme=https'
-      - 'traefik.http.routers.funkwhale-app.middlewares=funkwhale-app-https-redirect'
-      - 'traefik.http.routers.funkwhale-app-secure.entrypoints=https'
-      - 'traefik.http.routers.funkwhale-app-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
-      - 'traefik.http.routers.funkwhale-app-secure.tls.certresolver=cloudflare'
-      - 'traefik.http.routers.funkwhale-app-secure.service=funkwhale-app'
-      - 'traefik.http.services.funkwhale-app.loadbalancer.server.port=80'
+      - 'traefik.http.routers.funkwhale-front.entrypoints=http'
+      - 'traefik.http.routers.funkwhale-front-secure.tls=true'
+      - 'traefik.http.routers.funkwhale-front.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.middlewares.funkwhale-front-https-redirect.redirectscheme.scheme=https'
+      - 'traefik.http.routers.funkwhale-front.middlewares=funkwhale-front-https-redirect'
+      - 'traefik.http.routers.funkwhale-front-secure.entrypoints=https'
+      - 'traefik.http.routers.funkwhale-front-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.routers.funkwhale-front-secure.tls.certresolver=cloudflare'
+      - 'traefik.http.routers.funkwhale-front-secure.service=funkwhale-front'
+      - 'traefik.http.services.funkwhale-front.loadbalancer.server.port=80'
 
   funkwhale-db:
     image: postgres:latest
@@ -78,7 +139,7 @@ services:
     volumes:
       - ./volumes/data/db/postgres/funkwhale:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER_NAME:-funkwhale} -d ${DB_CREATE_DATABASE_NAME:-funkwhale}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 30s
       timeout: 10s
       retries: 3
